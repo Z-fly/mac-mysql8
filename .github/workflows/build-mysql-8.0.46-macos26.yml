@@ -27,6 +27,8 @@ jobs:
           cd build
           cmake .. \
             -DCMAKE_BUILD_TYPE=Release \
+            -DDOWNLOAD_BOOST=1 \
+            -DWITH_BOOST=$PWD/boost \
             -DCMAKE_INSTALL_PREFIX=$PWD/install
           cmake --build . --parallel
           cmake --install .
