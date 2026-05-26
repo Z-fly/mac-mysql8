@@ -15,10 +15,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Download MySQL 8.0.46 source
+      - name: Download MySQL 8.0.46 source bundle
         run: |
-          curl -fL -o mysql-8.0.46.tar.gz https://downloads.mysql.com/archives/get/p/23/file/mysql-8.0.46.tar.gz
-          tar -xzf mysql-8.0.46.tar.gz
+          curl -fL -o mysql-boost-8.0.46.tar.gz https://dev.mysql.com/get/Downloads/MySQL-8.0/mysql-boost-8.0.46.tar.gz
+          tar -xzf mysql-boost-8.0.46.tar.gz
 
       - name: Configure and build MySQL
         run: |
@@ -27,8 +27,6 @@ jobs:
           cd build
           cmake .. \
             -DCMAKE_BUILD_TYPE=Release \
-            -DDOWNLOAD_BOOST=1 \
-            -DWITH_BOOST=../boost \
             -DCMAKE_INSTALL_PREFIX=$PWD/install
           cmake --build . --parallel
           cmake --install .
