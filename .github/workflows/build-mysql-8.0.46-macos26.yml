@@ -1,0 +1,46 @@
+name: Build MySQL 8.0.46 on macOS 26 Intel
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  build:
+    runs-on: macos-26-intel
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download MySQL 8.0.46 source bundle
+        run: |
+          curl -fL -o mysql-boost-8.0.46.tar.gz https://dev.mysql.com/get/Downloads/MySQL-8.0/mysql-boost-8.0.46.tar.gz
+          tar -xzf mysql-boost-8.0.46.tar.gz
+
+      - name: Configure and build MySQL
+        run: |
+          cd mysql-8.0.46
+          mkdir build
+          cd build
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DDOWNLOAD_BOOST=1 \
+            -DWITH_BOOST=$PWD/boost \
+            -DCMAKE_INSTALL_PREFIX=$PWD/install
+          cmake --build . --parallel
+          cmake --install .
+
+      - name: Package compiled artifacts (bin/lib/share)
+        run: |
+          cd mysql-8.0.46/build/install
+          tar -czf ../../mysql-8.0.46-macos26-intel-bin-lib-share.tar.gz bin lib share
+
+      - name: Upload packaged artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: mysql-8.0.46-macos26-intel-bin-lib-share
+          path: mysql-8.0.46/mysql-8.0.46-macos26-intel-bin-lib-share.tar.gz
+          if-no-files-found: error
