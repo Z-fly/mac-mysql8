@@ -7,32 +7,43 @@
     考生需要从生成的 APK 中解析出 package 包名。
 
 依赖真实命令：
-    apktool
+    apktool（PATH 缺少时自动下载并校验官方 JAR，需要 java）
     zipalign
     apksigner
     keytool
 
 macOS 示例：
-    brew install apktool
     安装 Android SDK build-tools 后，把 zipalign/apksigner 加入 PATH
 
 Linux 示例：
-    sudo apt install apktool openjdk-17-jdk
+    安装 openjdk-17-jdk
     安装 Android SDK build-tools 后，把 zipalign/apksigner 加入 PATH
 """
 
 from argparse import ArgumentParser
 from base64 import b64decode
+from hashlib import sha256
 from json import dumps
 from pathlib import Path
 from random import choices
-from shutil import rmtree, which
+from shutil import copyfileobj, rmtree, which
 from string import ascii_lowercase, digits
 from subprocess import run, PIPE, STDOUT
+from urllib.error import URLError
+from urllib.request import urlopen
 import os
 import re
 import tempfile
 import xml.etree.ElementTree as ET
+
+
+APKTOOL版本 = "3.0.2"
+APKTOOL_JAR文件名 = f"apktool_{APKTOOL版本}.jar"
+APKTOOL下载地址 = (
+    f"https://github.com/iBotPeaches/Apktool/releases/download/v{APKTOOL版本}/"
+    f"{APKTOOL_JAR文件名}"
+)
+APKTOOL_SHA256 = "eee4669a704a14e0623407e6701b0b91887e61e1e4049cb7a82833e14ae8b5fd"
 
 
 # 原始检材 APK 已硬编码，不需要额外提供 APK 文件。
@@ -383,9 +394,76 @@ def 查找Android工具(工具名):
     return None
 
 
+def 计算文件SHA256(文件路径):
+    摘要 = sha256()
+    with 文件路径.open("rb") as 文件:
+        for 数据块 in iter(lambda: 文件.read(1024 * 1024), b""):
+            摘要.update(数据块)
+    return 摘要.hexdigest()
+
+
+def 准备Apktool命令():
+    """
+    GitHub 托管 runner 通常自带 Java 和 Android build-tools，但不带 apktool。
+    优先使用 PATH；缺少时下载固定版本官方 JAR，并在执行前校验摘要。
+    """
+    apktool路径 = which("apktool")
+    if apktool路径:
+        return [apktool路径]
+
+    java路径 = which("java")
+    if not java路径:
+        raise RuntimeError(
+            "缺少工具: apktool，且未找到 java，无法运行自动下载的 apktool JAR。"
+        )
+
+    指定JAR = os.environ.get("APKTOOL_JAR")
+    if 指定JAR:
+        指定JAR路径 = Path(指定JAR).expanduser()
+        if not 指定JAR路径.is_file():
+            raise RuntimeError("APKTOOL_JAR 指定的文件不存在: " + str(指定JAR路径))
+        print("[+] 使用 APKTOOL_JAR:", 指定JAR路径)
+        return [java路径, "-jar", str(指定JAR路径.resolve())]
+
+    缓存根目录 = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+    缓存目录 = 缓存根目录 / "apk_repack_challenge"
+    缓存JAR路径 = 缓存目录 / APKTOOL_JAR文件名
+
+    if 缓存JAR路径.is_file() and 计算文件SHA256(缓存JAR路径) == APKTOOL_SHA256:
+        print("[+] 使用已缓存的 apktool JAR:", 缓存JAR路径)
+        return [java路径, "-jar", str(缓存JAR路径)]
+
+    缓存目录.mkdir(parents=True, exist_ok=True)
+    临时JAR路径 = 缓存目录 / f".{APKTOOL_JAR文件名}.{os.getpid()}.tmp"
+    print("[+] PATH 未找到 apktool，正在下载:", APKTOOL下载地址)
+
+    try:
+        with urlopen(APKTOOL下载地址, timeout=120) as 响应:
+            with 临时JAR路径.open("wb") as 临时JAR文件:
+                copyfileobj(响应, 临时JAR文件)
+
+        实际摘要 = 计算文件SHA256(临时JAR路径)
+        if 实际摘要 != APKTOOL_SHA256:
+            raise RuntimeError(
+                "下载的 apktool JAR 校验失败: "
+                f"期望 {APKTOOL_SHA256}，实际 {实际摘要}"
+            )
+
+        临时JAR路径.replace(缓存JAR路径)
+    except (OSError, URLError) as 异常:
+        raise RuntimeError(
+            "自动下载 apktool 失败，请检查网络，或安装 apktool / 设置 APKTOOL_JAR。"
+        ) from 异常
+    finally:
+        临时JAR路径.unlink(missing_ok=True)
+
+    print("[+] apktool JAR 下载并校验完成:", 缓存JAR路径)
+    return [java路径, "-jar", str(缓存JAR路径)]
+
+
 def 检查工具():
     工具映射 = {
-        "apktool": which("apktool"),
+        "apktool": 准备Apktool命令(),
         "zipalign": 查找Android工具("zipalign"),
         "apksigner": 查找Android工具("apksigner"),
         "keytool": which("keytool"),
@@ -422,12 +500,12 @@ def 写出原始APK(路径):
     print("[+] 已写出原始 APK:", 路径)
 
 
-def 反编译APK(apktool路径, 输入APK, 输出目录):
+def 反编译APK(apktool命令, 输入APK, 输出目录):
     if 输出目录.exists():
         rmtree(输出目录)
 
     运行命令([
-        apktool路径,
+        *apktool命令,
         "d",
         "-f",
         str(输入APK),
@@ -480,12 +558,12 @@ def 修改ApktoolYml(解包目录, 新包名):
     print("[+] 已同步 apktool.yml")
 
 
-def 重新打包APK(apktool路径, 解包目录, 未签名APK):
+def 重新打包APK(apktool命令, 解包目录, 未签名APK):
     if 未签名APK.exists():
         未签名APK.unlink()
 
     运行命令([
-        apktool路径,
+        *apktool命令,
         "b",
         str(解包目录),
         "-o",
